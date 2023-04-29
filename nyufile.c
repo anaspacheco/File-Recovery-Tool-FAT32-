@@ -176,62 +176,87 @@ int main(int argc, char *argv[])
         unsigned int root_cluster = entry->BPB_RootClus;  // Cluster where the root directory can be found
         unsigned int sector_size = entry->BPB_BytsPerSec; // Number of bytes per sector
         unsigned int bytes_per_cluster = entry->BPB_SecPerClus * sector_size;
-        unsigned int root_entry = (entry->BPB_RsvdSecCnt + entry->BPB_NumFATs * entry->BPB_FATSz32) * sector_size + (entry->BPB_SecPerClus * (root_cluster - 2)) * sector_size;
-        unsigned int num_entries = bytes_per_cluster / sizeof(DirEntry);
         int found = 0;
 
-        for (unsigned int i = 0; i < num_entries; i++)
+        while (root_cluster != 0) // while not EOF
         {
-            DirEntry *dir_entry = (DirEntry *)(addr + root_entry + i * sizeof(DirEntry));
-            if (dir_entry->DIR_Name[0] == 0xe5)
+            unsigned int root_entry = (entry->BPB_RsvdSecCnt + entry->BPB_NumFATs * entry->BPB_FATSz32) * sector_size + (entry->BPB_SecPerClus * (root_cluster - 2)) * sector_size;
+
+            unsigned int num_entries = bytes_per_cluster / sizeof(DirEntry);
+
+            for (unsigned int i = 0; i < num_entries; i++)
             {
-                char *file_name_deleted = (char *)dir_entry->DIR_Name;
-                char *file_name_cleaned = malloc(strlen(file_name_deleted) + 1);
-                char *p = file_name_cleaned;
-                char *q = file_name_deleted;
+                DirEntry *dir_entry = (DirEntry *)(addr + root_entry + i * sizeof(DirEntry));
 
-                while (*q != '\0')
+                if (dir_entry->DIR_Name[0] == 0xe5)
                 {
-                    if (!isspace((unsigned char)*q))
+                    char *file_name_deleted = (char *)dir_entry->DIR_Name;
+                    char *file_name_cleaned = malloc(strlen(file_name_deleted) + 1);
+                    char *p = file_name_cleaned;
+                    char *q = file_name_deleted;
+
+                    while (*q != '\0')
                     {
-                        *p++ = *q;
+                        if (!isspace((unsigned char)*q))
+                        {
+                            *p++ = *q;
+                        }
+                        q++;
                     }
-                    q++;
-                }
-                *p = '\0';
+                    *p = '\0';
 
-                char *new_filename = malloc(strlen(filename));
-                char *p2 = new_filename;
-                char *q2 = filename;
+                    char *new_filename = malloc(strlen(filename));
+                    char *p2 = new_filename;
+                    char *q2 = filename;
 
-                while (*q2 != '\0')
-                {
-                    if (*q2 != '.')
+                    while (*q2 != '\0')
                     {
-                        *p2++ = *q2;
+                        if (*q2 != '.')
+                        {
+                            *p2++ = *q2;
+                        }
+                        q2++;
                     }
-                    q2++;
-                }
-                *p2 = '\0';
+                    *p2 = '\0';
 
-                if (strcmp(file_name_cleaned + 1, new_filename + 1) == 0)
-                {
-                    unsigned int cluster_num = (dir_entry->DIR_FstClusHI << 16) | dir_entry->DIR_FstClusLO;
-                    for(unsigned int i = 0; i < entry->BPB_NumFATs; i++){
-                        unsigned int offset = entry->BPB_RsvdSecCnt * entry->BPB_BytsPerSec + i*(entry->BPB_FATSz32 * entry->BPB_BytsPerSec);
-                        unsigned int *fat_table = (unsigned int *)(addr + offset);
-                        fat_table[cluster_num] = 0x0FFFFFF8;
+                    if (strcmp(file_name_cleaned + 1, new_filename + 1) == 0)
+                    {
+                        unsigned int num_clusters = (dir_entry->DIR_FileSize + bytes_per_cluster - 1) / bytes_per_cluster;
+                        if (dir_entry->DIR_FileSize > 0)
+                        {
+                            unsigned int current_cluster = (dir_entry->DIR_FstClusHI << 16) | dir_entry->DIR_FstClusLO;
+
+                            for (unsigned int i = 0; i < entry->BPB_NumFATs; i++)
+                            {
+                                unsigned int offset = entry->BPB_RsvdSecCnt * entry->BPB_BytsPerSec + i * (entry->BPB_FATSz32 * entry->BPB_BytsPerSec);
+                                unsigned int *fat_table = (unsigned int *)(addr + offset);
+
+                                for (unsigned int j = 0; j < num_clusters; j++)
+                                {
+                                    if (j == num_clusters - 1)
+                                    {
+                                        fat_table[current_cluster] = 0xFFFFFFFF;
+                                    }
+                                    else
+                                    {
+                                        fat_table[current_cluster] = current_cluster + 1;
+                                        current_cluster = current_cluster + 1;
+                                    }
+                                }
+                            }
+                        }
+                        file_name_deleted[0] = filename[0];
+                        printf("%s: successfully recovered\n", filename);
+                        found = 1;
+                        break;
                     }
-                    file_name_deleted[0] = filename[0];
-                    printf("%s: successfully recovered\n", filename);
-                    found = 1;
-                    break;
-                }
-                else
-                {
-                    continue;
+                    else
+                    {
+                        continue;
+                    }
                 }
             }
+            root_cluster = fat_entry(addr, entry, root_cluster);
         }
         if (found == 0)
         {
