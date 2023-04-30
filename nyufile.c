@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <stdbool.h>
 #include <ctype.h>
+#include <openssl/sha.h>
 
 #pragma pack(push, 1)
 typedef struct DirEntry
@@ -95,7 +96,7 @@ int main(int argc, char *argv[])
     int opt = 1;
     char option = '\0';
     char *filename;
-    char *sha1;
+    char *sha1 = NULL;
 
     if (argc == 1)
     {
@@ -143,7 +144,7 @@ int main(int argc, char *argv[])
             if (optind < argc && strcmp(argv[optind], "-s") == 0)
             {
                 sha1 = argv[optind + 1];
-                printf(sha1);
+                // printf(sha1);
                 optind += 2;
             }
             break;
@@ -153,7 +154,7 @@ int main(int argc, char *argv[])
             if (optind < argc && strcmp(argv[optind], "-s") == 0)
             {
                 sha1 = argv[optind + 1];
-                printf(sha1);
+                // printf(sha1);
                 optind += 2;
             }
             printf("%c", option);
@@ -171,12 +172,126 @@ int main(int argc, char *argv[])
 
     entry = (BootEntry *)addr;
 
-    if (option == 'r')
+    if (option == 'r' && sha1 != NULL)
     {
         unsigned int root_cluster = entry->BPB_RootClus;  // Cluster where the root directory can be found
         unsigned int sector_size = entry->BPB_BytsPerSec; // Number of bytes per sector
         unsigned int bytes_per_cluster = entry->BPB_SecPerClus * sector_size;
-        int found = 0;
+        int matches = 0;
+        DirEntry *matching_entry = NULL;
+        unsigned char hash[SHA_DIGEST_LENGTH];
+
+        while (root_cluster != 0) // while not EOF
+        {
+            unsigned int root_entry = (entry->BPB_RsvdSecCnt + entry->BPB_NumFATs * entry->BPB_FATSz32) * sector_size + (entry->BPB_SecPerClus * (root_cluster - 2)) * sector_size;
+
+            unsigned int num_entries = bytes_per_cluster / sizeof(DirEntry);
+
+            for (unsigned int i = 0; i < num_entries; i++)
+            {
+                DirEntry *dir_entry = (DirEntry *)(addr + root_entry + i * sizeof(DirEntry));
+                if (dir_entry->DIR_Name[0] == 0xe5)
+                {
+                    char *file_name_deleted = (char *)dir_entry->DIR_Name;
+                    char *file_name_cleaned = malloc(strlen(file_name_deleted) + 1);
+                    char *p = file_name_cleaned;
+                    char *q = file_name_deleted;
+                    while (*q != '\0')
+                    {
+                        if (!isspace((unsigned char)*q))
+                        {
+                            *p++ = *q;
+                        }
+                        q++;
+                    }
+                    *p = '\0';
+
+                    char *new_filename = malloc(strlen(filename));
+                    char *p2 = new_filename;
+                    char *q2 = filename;
+
+                    while (*q2 != '\0')
+                    {
+                        if (*q2 != '.')
+                        {
+                            *p2++ = *q2;
+                        }
+                        q2++;
+                    }
+                    *p2 = '\0';
+
+                    if (strcmp(file_name_cleaned + 1, new_filename + 1) == 0)
+                    {
+                        unsigned int start_cluster = (dir_entry->DIR_FstClusHI << 16) | dir_entry->DIR_FstClusLO;
+                        unsigned int byte_address = (entry->BPB_RsvdSecCnt + entry->BPB_NumFATs * entry->BPB_FATSz32 + (start_cluster - 2) * entry->BPB_SecPerClus) * sector_size;
+                        unsigned char *file_content = (unsigned char *)(addr + byte_address);
+                        
+                        SHA1((unsigned char *)(file_content), dir_entry->DIR_FileSize, hash);
+                        unsigned char sha1_bytes[SHA_DIGEST_LENGTH];
+                        for (int i = 0; i < SHA_DIGEST_LENGTH * 2; i += 2)
+                        {
+                            char hex[3];
+                            hex[0] = sha1[i];
+                            hex[1] = sha1[i + 1];
+                            hex[2] = '\0';
+                            sha1_bytes[i / 2] = strtol(hex, NULL, 16);
+                        }
+                        if (memcmp(sha1_bytes, hash, SHA_DIGEST_LENGTH) == 0)
+                        {
+                            matches++;
+                            matching_entry = dir_entry;
+                        }
+                        else
+                        {
+                            continue;
+                        }
+                    }
+                }
+            }
+            root_cluster = fat_entry(addr, entry, root_cluster);
+        }
+        if (matches == 0)
+        {
+            printf("%s: file not found\n", filename);
+        }
+        else
+        {
+            unsigned int num_clusters = (matching_entry->DIR_FileSize + bytes_per_cluster - 1) / bytes_per_cluster;
+            if (matching_entry->DIR_FileSize > 0)
+            {
+                unsigned int current_cluster = (matching_entry->DIR_FstClusHI << 16) | matching_entry->DIR_FstClusLO;
+
+                for (unsigned int i = 0; i < entry->BPB_NumFATs; i++)
+                {
+                    unsigned int offset = entry->BPB_RsvdSecCnt * entry->BPB_BytsPerSec + i * (entry->BPB_FATSz32 * entry->BPB_BytsPerSec);
+                    unsigned int *fat_table = (unsigned int *)(addr + offset);
+
+                    for (unsigned int j = 0; j < num_clusters; j++)
+                    {
+                        if (j == num_clusters - 1)
+                        {
+                            fat_table[current_cluster] = 0xFFFFFFFF;
+                        }
+                        else
+                        {
+                            fat_table[current_cluster] = current_cluster + 1;
+                            current_cluster = current_cluster + 1;
+                        }
+                    }
+                }
+            }
+            matching_entry->DIR_Name[0] = filename[0];
+            printf("%s: successfully recovered with SHA-1\n", filename);
+        }
+    }
+
+    if (option == 'r' && sha1 == NULL)
+    {
+        unsigned int root_cluster = entry->BPB_RootClus;  // Cluster where the root directory can be found
+        unsigned int sector_size = entry->BPB_BytsPerSec; // Number of bytes per sector
+        unsigned int bytes_per_cluster = entry->BPB_SecPerClus * sector_size;
+        int matches = 0;
+        DirEntry *matching_entry = NULL;
 
         while (root_cluster != 0) // while not EOF
         {
@@ -221,34 +336,13 @@ int main(int argc, char *argv[])
 
                     if (strcmp(file_name_cleaned + 1, new_filename + 1) == 0)
                     {
-                        unsigned int num_clusters = (dir_entry->DIR_FileSize + bytes_per_cluster - 1) / bytes_per_cluster;
-                        if (dir_entry->DIR_FileSize > 0)
+                        matches++;
+                        if (matches > 1)
                         {
-                            unsigned int current_cluster = (dir_entry->DIR_FstClusHI << 16) | dir_entry->DIR_FstClusLO;
-
-                            for (unsigned int i = 0; i < entry->BPB_NumFATs; i++)
-                            {
-                                unsigned int offset = entry->BPB_RsvdSecCnt * entry->BPB_BytsPerSec + i * (entry->BPB_FATSz32 * entry->BPB_BytsPerSec);
-                                unsigned int *fat_table = (unsigned int *)(addr + offset);
-
-                                for (unsigned int j = 0; j < num_clusters; j++)
-                                {
-                                    if (j == num_clusters - 1)
-                                    {
-                                        fat_table[current_cluster] = 0xFFFFFFFF;
-                                    }
-                                    else
-                                    {
-                                        fat_table[current_cluster] = current_cluster + 1;
-                                        current_cluster = current_cluster + 1;
-                                    }
-                                }
-                            }
+                            printf("%s: multiple candidates found\n", filename);
+                            exit(0);
                         }
-                        file_name_deleted[0] = filename[0];
-                        printf("%s: successfully recovered\n", filename);
-                        found = 1;
-                        break;
+                        matching_entry = dir_entry;
                     }
                     else
                     {
@@ -258,9 +352,38 @@ int main(int argc, char *argv[])
             }
             root_cluster = fat_entry(addr, entry, root_cluster);
         }
-        if (found == 0)
+        if (matches == 0)
         {
             printf("%s: file not found\n", filename);
+        }
+        else
+        {
+            unsigned int num_clusters = (matching_entry->DIR_FileSize + bytes_per_cluster - 1) / bytes_per_cluster;
+            if (matching_entry->DIR_FileSize > 0)
+            {
+                unsigned int current_cluster = (matching_entry->DIR_FstClusHI << 16) | matching_entry->DIR_FstClusLO;
+
+                for (unsigned int i = 0; i < entry->BPB_NumFATs; i++)
+                {
+                    unsigned int offset = entry->BPB_RsvdSecCnt * entry->BPB_BytsPerSec + i * (entry->BPB_FATSz32 * entry->BPB_BytsPerSec);
+                    unsigned int *fat_table = (unsigned int *)(addr + offset);
+
+                    for (unsigned int j = 0; j < num_clusters; j++)
+                    {
+                        if (j == num_clusters - 1)
+                        {
+                            fat_table[current_cluster] = 0xFFFFFFFF;
+                        }
+                        else
+                        {
+                            fat_table[current_cluster] = current_cluster + 1;
+                            current_cluster = current_cluster + 1;
+                        }
+                    }
+                }
+            }
+            matching_entry->DIR_Name[0] = filename[0];
+            printf("%s: successfully recovered\n", filename);
         }
     }
 
