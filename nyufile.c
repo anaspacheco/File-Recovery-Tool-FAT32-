@@ -68,7 +68,6 @@ void usage_info()
     printf("  -i                     Print the file system information.\n");
     printf("  -l                     List the root directory.\n");
     printf("  -r filename [-s sha1]  Recover a contiguous file.\n");
-    printf("  -R filename -s sha1    Recover a possibly non-contiguous file.\n");
 }
 
 // Source: https://www.cs.fsu.edu/~cop4610t/lectures/project3/Week11/Slides_week11.pdf
@@ -148,23 +147,12 @@ int main(int argc, char *argv[])
                 optind += 2;
             }
             break;
-        case 'R':
-            option = 'R';
-            filename = optarg;
-            if (optind < argc && strcmp(argv[optind], "-s") == 0)
-            {
-                sha1 = argv[optind + 1];
-                // printf(sha1);
-                optind += 2;
-            }
-            printf("%c", option);
-            break;
         default:
             break;
         }
     }
 
-    if (option == 0 || (option == 'r' && filename == NULL) || (option == 'R' && (filename == NULL || sha1 == NULL)))
+    if (option == 0 || (option == 'r' && filename == NULL))
     {
         usage_info();
         exit(0);
