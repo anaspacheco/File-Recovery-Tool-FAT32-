@@ -64,7 +64,7 @@ struct BootEntry *entry;
 
 void usage_info()
 {
-    printf("Usage: ./nyufile disk <options>\n");
+    printf("Usage: ./file_rec disk <options>\n");
     printf("  -i                     Print the file system information.\n");
     printf("  -l                     List the root directory.\n");
     printf("  -r filename [-s sha1]  Recover a contiguous file.\n");
