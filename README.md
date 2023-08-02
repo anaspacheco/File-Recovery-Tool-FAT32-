@@ -4,6 +4,10 @@
 
 Welcome to the File Recovery Tool designed specifically for FAT32 file systems. This powerful utility allows you to recover lost or deleted files with ease, helping you regain access to valuable data.
 
+<p align="center">
+ ![image](https://github.com/anaspacheco/File-Recovery-Tool-FAT32-/assets/121977567/e54cedca-a2b8-439f-ac3d-8a20beb1b898) 
+</p> 
+
 ## Usage
 
 To get started, follow the instructions below:
